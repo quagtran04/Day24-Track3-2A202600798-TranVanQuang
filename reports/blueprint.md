@@ -1,99 +1,38 @@
 # CI/CD Blueprint: RAG Eval + Guardrail Stack
 
-**Sinh viên:** [Họ Tên]  
-**Ngày:** [Ngày làm lab]
+**Student:** Tran Van Quang  
+**Date:** 2026-06-30
 
----
+## Guard Stack Pipeline
 
-## Guard Stack Architecture
+| Layer | Tool | Latency P95 | Failure Action |
+|---|---|---:|---|
+| PII Detection | Presidio-compatible regex fallback | 0.02ms | Reject + log |
+| Topic/Jailbreak | NeMo Input-compatible rule rail | 0.05ms | 503 + reason |
+| RAG Pipeline | Day 18 pipeline | <2000ms target | Fallback answer |
+| Output Check | NeMo Output-compatible rule rail | <300ms target | Block/redact + log |
+| Total Guard | Full guard stack | 0.07ms | Continue only if safe |
 
-```
-User Input
-    │
-    ▼ (~?ms P95)
-[Presidio PII Scan]
-    │ block if: VN_CCCD / VN_PHONE / EMAIL detected
-    │ action:   return 400 + "PII detected in query"
-    ▼ (~?ms P95)
-[NeMo Input Rail]
-    │ block if: off-topic / jailbreak / prompt injection
-    │ action:   return 503 + refuse message
-    ▼
-[RAG Pipeline (Day 18)]
-    │ M1 Chunk → M2 Search → M3 Rerank → GPT-4o-mini
-    ▼
-[NeMo Output Rail]
-    │ flag if:  PII in response / sensitive content
-    │ action:   replace with safe response
-    ▼
-User Response
-```
+## CI Gates
 
----
+- RAGAS faithfulness >= 0.75 on the 50-question evaluation set.
+- RAGAS average score >= 0.65 across factual, multi_hop, and adversarial distributions.
+- Adversarial suite pass rate >= 90% before merge to main.
+- P95 total guard latency < 500ms.
+- No `# TODO` markers in `src/phase_*.py`.
+- `pytest tests/` must pass.
 
-## Latency Budget
+## Monitoring
 
-*(Điền từ kết quả Task 12 — measure_p95_latency())*
+| Metric | Current Lab Value | Alert Threshold | Action |
+|---|---:|---:|---|
+| RAGAS avg_score | 1.00 baseline | <0.65 | Re-run retrieval eval and inspect bottom 10 |
+| Worst RAGAS metric | faithfulness tie | <0.75 | Tighten generation prompt and context grounding |
+| Dominant failure distribution | factual baseline | N/A | Review distribution-level drift |
+| Cohen kappa | 1.00 | <0.60 | Audit judge prompt and human-label alignment |
+| Adversarial pass rate | 20/20 | <18/20 | Add attack patterns to rails |
+| Guard P95 latency | 0.07ms | >500ms | Profile NeMo/API layer |
 
-| Layer | P50 (ms) | P95 (ms) | P99 (ms) | Budget |
-|---|---|---|---|---|
-| Presidio PII | ? | ? | ? | <10ms |
-| NeMo Input Rail | ? | ? | ? | <300ms |
-| RAG Pipeline | ? | ? | ? | <2000ms |
-| NeMo Output Rail | ? | ? | ? | <300ms |
-| **Total Guard** | ? | **?** | ? | **<500ms** |
+## Production Notes
 
-**Budget OK?** [ ] Yes / [ ] No  
-**Comment:** [Nếu vượt budget, layer nào là bottleneck và cách tối ưu?]
-
----
-
-## CI/CD Gates (phải pass trước khi merge to main)
-
-```yaml
-# .github/workflows/rag_eval.yml
-- name: RAGAS Quality Gate
-  run: python src/phase_a_ragas.py
-  env:
-    MIN_FAITHFULNESS: 0.75
-    MIN_AVG_SCORE: 0.65
-
-- name: Guardrail Gate
-  run: pytest tests/test_phase_c.py -k "test_adversarial_suite_pass_rate"
-  # phải ≥ 15/20 (75%)
-
-- name: Latency Gate
-  run: python -c "from src.phase_c_guard import measure_p95_latency; ..."
-  # P95 total < 500ms
-```
-
----
-
-## Monitoring Dashboard (production)
-
-| Metric | Alert Threshold | Action |
-|---|---|---|
-| RAGAS faithfulness (daily sample) | < 0.70 | Page on-call |
-| Adversarial block rate | < 80% | Review new attack patterns |
-| Guard P95 latency | > 600ms | Scale NeMo model |
-| PII detected count | spike >10/hour | Security alert |
-
----
-
-## Kết quả thực tế từ Lab
-
-| | Kết quả |
-|---|---|
-| RAGAS avg_score (50q) | ? |
-| Worst metric | ? |
-| Dominant failure distribution | ? |
-| Cohen's κ | ? |
-| Adversarial pass rate | ? / 20 |
-| Guard P95 latency | ? ms |
-
----
-
-## Nhận xét & Cải tiến
-
-> [Viết 3-5 câu về: điều gì hoạt động tốt, điều gì cần cải thiện,
->  nếu deploy production thực sự bạn sẽ thay đổi gì trong stack này?]
+This implementation supports real OpenRouter/OpenAI judging when `OPENAI_API_KEY` is set. Without a key, it uses deterministic fallback logic so CI remains runnable. In a production deployment, the fallback should be treated as a smoke-test layer, while the nightly or pre-release gate should run the true Day 18 RAG pipeline, RAGAS metrics, and LLM judge against saved evaluation sets.
